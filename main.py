@@ -10,22 +10,26 @@ from fastai.text.all import *
 import openai
 import os
 
+# Configurações iniciais
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Em produção, ajuste para seu domínio
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# JWT
 SECRET_KEY = "mysecretkey"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
+# OpenAI Key
 openai.api_key = "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"
 
+# Banco
 Base = declarative_base()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
@@ -51,8 +55,10 @@ class Chat(Base):
 
 Base.metadata.create_all(bind=engine)
 
+# Carrega modelo
 learn = load_learner("model.pkl") if os.path.exists("model.pkl") else None
 
+# Auxiliares
 def verify_password(plain_password, hashed_password):
     return pwd_context.verify(plain_password, hashed_password)
 
@@ -96,9 +102,10 @@ def fallback_chatgpt(message: str):
             temperature=0.7
         )
         return response.choices[0].message.content.strip()
-    except Exception as e:
+    except Exception:
         return "Não consegui gerar uma resposta personalizada agora. Tente novamente mais tarde."
 
+# Endpoints
 @app.post("/register")
 def register(form_data: OAuth2PasswordRequestForm = Depends()):
     db = SessionLocal()
@@ -116,10 +123,11 @@ def register(form_data: OAuth2PasswordRequestForm = Depends()):
 def login(form_data: OAuth2PasswordRequestForm = Depends()):
     db = SessionLocal()
     user = get_user(db, form_data.username)
-    db.close()
     if not user or not verify_password(form_data.password, user.hashed_password):
+        db.close()
         raise HTTPException(status_code=401, detail="Invalid credentials")
     token = create_access_token({"sub": user.username})
+    db.close()
     return {"access_token": token, "token_type": "bearer"}
 
 @app.post("/mensagem")
@@ -139,4 +147,15 @@ def mensagem(data: dict, user: User = Depends(get_current_user)):
     return {"mensagem": msg, "categoria": "Auto" if learn else "GPT", "resposta": resposta}
 
 @app.get("/historico")
-def historico(user: User = Depends
+def historico(user: User = Depends(get_current_user)):
+    db = SessionLocal()
+    chats = db.query(Chat).filter(Chat.user_id == user.id).all()
+    db.close()
+    return [
+        {
+            "mensagem": c.message,
+            "categoria": c.category,
+            "resposta": c.response,
+            "data": c.timestamp
+        } for c in chats
+    ]
