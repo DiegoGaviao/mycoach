@@ -1,8 +1,8 @@
 fastapi
 uvicorn
 sqlalchemy
-jose
-python-multipart
 passlib[bcrypt]
-pandas
+python-jose
+python-multipart
+fastai
 openai
