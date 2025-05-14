@@ -10,27 +10,22 @@ from fastai.text.all import *
 import openai
 import os
 
-# Configurações iniciais
 app = FastAPI()
 
-# Liberar CORS para qualquer origem (em produção, restrinja ao domínio do frontend)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # Em produção, ajuste para seu domínio
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Configurações JWT
 SECRET_KEY = "mysecretkey"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
-# OpenAI API Key (coloque sua chave válida)
 openai.api_key = "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"
 
-# Banco e modelos
 Base = declarative_base()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
@@ -56,10 +51,8 @@ class Chat(Base):
 
 Base.metadata.create_all(bind=engine)
 
-# Carrega modelo se existir
 learn = load_learner("model.pkl") if os.path.exists("model.pkl") else None
 
-# Auxiliares
 def verify_password(plain_password, hashed_password):
     return pwd_context.verify(plain_password, hashed_password)
 
@@ -91,7 +84,6 @@ def get_current_user(token: str = Depends(oauth2_scheme)):
         raise credentials_exception
     return user
 
-# Fallback inteligente via OpenAI ChatGPT
 def fallback_chatgpt(message: str):
     try:
         response = openai.ChatCompletion.create(
@@ -107,11 +99,11 @@ def fallback_chatgpt(message: str):
     except Exception as e:
         return "Não consegui gerar uma resposta personalizada agora. Tente novamente mais tarde."
 
-# Endpoints API
 @app.post("/register")
 def register(form_data: OAuth2PasswordRequestForm = Depends()):
     db = SessionLocal()
     if get_user(db, form_data.username):
+        db.close()
         raise HTTPException(status_code=400, detail="Username already registered")
     user = User(username=form_data.username, hashed_password=get_password_hash(form_data.password))
     db.add(user)
@@ -147,8 +139,4 @@ def mensagem(data: dict, user: User = Depends(get_current_user)):
     return {"mensagem": msg, "categoria": "Auto" if learn else "GPT", "resposta": resposta}
 
 @app.get("/historico")
-def historico(user: User = Depends(get_current_user)):
-    db = SessionLocal()
-    chats = db.query(Chat).filter(Chat.user_id == user.id).all()
-    db.close()
-    return [{"mensagem": c.message, "categoria": c.category, "resposta": c.response, "data": c.timestamp} for c in chats]
+def historico(user: User = Depends
