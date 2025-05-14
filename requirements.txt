@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+sqlalchemy
+jose
+python-multipart
+passlib[bcrypt]
+pandas
+openai
