@@ -10,11 +10,11 @@ from fastai.text.all import *
 import openai
 import os
 import urllib.request
+import requests
 
 # Configurações iniciais
 app = FastAPI()
 
-# Liberar CORS para qualquer origem (em produção, restrinja ao domínio do frontend)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -23,15 +23,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Configurações JWT
+# JWT
 SECRET_KEY = "mysecretkey"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
-# OpenAI API Key (coloque sua chave válida)
+# API KEYS
 openai.api_key = "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"
+deepseek_api_key = "SUA_CHAVE_DEEPSEEK"  # substitua pela sua chave real
 
-# Banco e modelos
+# Banco
 Base = declarative_base()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
@@ -100,8 +101,9 @@ def get_current_user(token: str = Depends(oauth2_scheme)):
         raise credentials_exception
     return user
 
-# Fallback inteligente via OpenAI ChatGPT
-def fallback_chatgpt(message: str):
+# 🔥 Fallback múltiplo (OpenAI ➡️ DeepSeek ➡️ Resposta padrão)
+def smart_fallback(message: str):
+    # 1º Tentativa OpenAI
     try:
         response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
@@ -110,14 +112,35 @@ def fallback_chatgpt(message: str):
                 {"role": "user", "content": message}
             ],
             max_tokens=300,
-            temperature=0.7
+            temperature=0.7,
+            timeout=15
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
-        print(f"Erro no ChatGPT: {e}")
-        return "Não consegui gerar uma resposta personalizada agora. Tente novamente mais tarde."
+        print(f"❌ OpenAI falhou: {e}")
 
-# Endpoints API
+    # 2º Tentativa DeepSeek
+    try:
+        response = requests.post(
+            "https://api.deepseek.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {deepseek_api_key}"},
+            json={
+                "model": "deepseek-chat",
+                "messages": [
+                    {"role": "system", "content": "Você é um coach motivacional."},
+                    {"role": "user", "content": message}
+                ]
+            },
+            timeout=15
+        )
+        return response.json()['choices'][0]['message']['content']
+    except Exception as e:
+        print(f"❌ DeepSeek falhou: {e}")
+
+    # 3º Resposta padrão
+    return "Nenhuma IA respondeu no momento. Tente novamente mais tarde."
+
+# Endpoints
 @app.post("/register")
 def register(form_data: OAuth2PasswordRequestForm = Depends()):
     db = SessionLocal()
@@ -144,18 +167,21 @@ def login(form_data: OAuth2PasswordRequestForm = Depends()):
 @app.post("/mensagem")
 def mensagem(data: dict, user: User = Depends(get_current_user)):
     msg = data.get("msg", "")
-    if learn:
+    try:
         pred, _, _ = learn.predict(msg)
         resposta = f"Sua mensagem foi classificada como '{pred}'. Aqui vai uma sugestão personalizada: Continue acreditando em você!"
-    else:
-        resposta = fallback_chatgpt(msg)
+        categoria = "Auto"
+    except Exception as e:
+        print(f"❌ Erro no modelo local: {e}")
+        resposta = smart_fallback(msg)
+        categoria = "IA externa"
 
     db = SessionLocal()
-    chat = Chat(message=msg, response=resposta, category="Auto" if learn else "GPT", user_id=user.id)
+    chat = Chat(message=msg, response=resposta, category=categoria, user_id=user.id)
     db.add(chat)
     db.commit()
     db.close()
-    return {"mensagem": msg, "categoria": "Auto" if learn else "GPT", "resposta": resposta}
+    return {"mensagem": msg, "categoria": categoria, "resposta": resposta}
 
 @app.get("/historico")
 def historico(user: User = Depends(get_current_user)):
