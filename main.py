@@ -58,16 +58,28 @@ class Chat(Base):
 
 Base.metadata.create_all(bind=engine)
 
-# Baixar modelo se não existir
+# Baixar modelo seguro com verificação robusta
 MODEL_PATH = "model.pkl"
-MODEL_URL = "https://drive.google.com/uc?export=download&id=1SMNYCCQWMB1lVMwaooCE7L7ZubKqpxFF"
+MODEL_URL = "https://www.dropbox.com/scl/fi/lokkkomxvbh89ajvwtmhi/model.pkl?rlkey=fdfqg194r7jaczkvxcq89qg7x&st=4n3z4sx4&dl=1"
 
 if not os.path.exists(MODEL_PATH):
-    print("⏳ Baixando modelo...")
+    print("⏳ Baixando modelo do Dropbox...")
     urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
-    print("✅ Modelo baixado!")
+    if os.path.getsize(MODEL_PATH) < 1024:
+        print("❌ Modelo parece inválido (tamanho muito pequeno).")
+        raise Exception("Modelo baixado incorretamente.")
+    with open(MODEL_PATH, "rb") as f:
+        first_byte = f.read(1)
+        if first_byte == b"<":
+            print("❌ Erro: arquivo HTML detectado ao invés de pickle.")
+            raise Exception("Download inválido. Verifique o link.")
+    print("✅ Modelo baixado com sucesso!")
 
-learn = load_learner(MODEL_PATH)
+try:
+    learn = load_learner(MODEL_PATH)
+except Exception as e:
+    print(f"❌ Erro ao carregar modelo: {e}")
+    learn = None
 
 # Auxiliares
 def verify_password(plain_password, hashed_password):
@@ -103,12 +115,11 @@ def get_current_user(token: str = Depends(oauth2_scheme)):
 
 # 🔥 Fallback múltiplo (OpenAI ➡️ DeepSeek ➡️ Resposta padrão)
 def smart_fallback(message: str):
-    # 1º Tentativa OpenAI
     try:
         response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
             messages=[
-                {"role": "system", "content": "Você é um coach motivacional que ajuda o usuário a refletir, propor ações e trazer insights positivos."},
+                {"role": "system", "content": "Você é um coach motivacional."},
                 {"role": "user", "content": message}
             ],
             max_tokens=300,
@@ -119,7 +130,6 @@ def smart_fallback(message: str):
     except Exception as e:
         print(f"❌ OpenAI falhou: {e}")
 
-    # 2º Tentativa DeepSeek
     try:
         response = requests.post(
             "https://api.deepseek.com/v1/chat/completions",
@@ -137,7 +147,6 @@ def smart_fallback(message: str):
     except Exception as e:
         print(f"❌ DeepSeek falhou: {e}")
 
-    # 3º Resposta padrão
     return "Nenhuma IA respondeu no momento. Tente novamente mais tarde."
 
 # Endpoints
