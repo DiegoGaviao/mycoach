@@ -6,10 +6,7 @@ from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from jose import JWTError, jwt
 from datetime import datetime, timedelta
 from passlib.context import CryptContext
-from fastai.text.all import *
 import openai
-import os
-import urllib.request
 import requests
 
 # Configurações iniciais
@@ -30,7 +27,7 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
 # API KEYS
 openai.api_key = "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"
-deepseek_api_key = "SUA_CHAVE_DEEPSEEK"  # substitua pela sua chave real
+deepseek_api_key = "SUA_CHAVE_DEEPSEEK"
 
 # Banco
 Base = declarative_base()
@@ -58,68 +55,13 @@ class Chat(Base):
 
 Base.metadata.create_all(bind=engine)
 
-# Baixar modelo seguro com verificação robusta
-MODEL_PATH = "model.pkl"
-MODEL_URL = "https://www.dropbox.com/scl/fi/lokkkomxvbh89ajvwtmhi/model.pkl?rlkey=fdfqg194r7jaczkvxcq89qg7x&st=4n3z4sx4&dl=1"
-
-if not os.path.exists(MODEL_PATH):
-    print("⏳ Baixando modelo do Dropbox...")
-    urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
-    if os.path.getsize(MODEL_PATH) < 1024:
-        print("❌ Modelo parece inválido (tamanho muito pequeno).")
-        raise Exception("Modelo baixado incorretamente.")
-    with open(MODEL_PATH, "rb") as f:
-        first_byte = f.read(1)
-        if first_byte == b"<":
-            print("❌ Erro: arquivo HTML detectado ao invés de pickle.")
-            raise Exception("Download inválido. Verifique o link.")
-    print("✅ Modelo baixado com sucesso!")
-
-try:
-    learn = load_learner(MODEL_PATH)
-except Exception as e:
-    print(f"❌ Erro ao carregar modelo: {e}")
-    learn = None
-
-# Auxiliares
-def verify_password(plain_password, hashed_password):
-    return pwd_context.verify(plain_password, hashed_password)
-
-def get_password_hash(password):
-    return pwd_context.hash(password)
-
-def create_access_token(data: dict):
-    to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-
-def get_user(db, username: str):
-    return db.query(User).filter(User.username == username).first()
-
-def get_current_user(token: str = Depends(oauth2_scheme)):
-    credentials_exception = HTTPException(status_code=401, detail="Not authenticated")
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username: str = payload.get("sub")
-        if username is None:
-            raise credentials_exception
-    except JWTError:
-        raise credentials_exception
-    db = SessionLocal()
-    user = get_user(db, username=username)
-    db.close()
-    if user is None:
-        raise credentials_exception
-    return user
-
 # 🔥 Fallback múltiplo (OpenAI ➡️ DeepSeek ➡️ Resposta padrão)
 def smart_fallback(message: str):
     try:
         response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
             messages=[
-                {"role": "system", "content": "Você é um coach motivacional."},
+                {"role": "system", "content": "Você é um coach motivacional que ajuda o usuário a refletir, propor ações e trazer insights positivos."},
                 {"role": "user", "content": message}
             ],
             max_tokens=300,
@@ -153,10 +95,10 @@ def smart_fallback(message: str):
 @app.post("/register")
 def register(form_data: OAuth2PasswordRequestForm = Depends()):
     db = SessionLocal()
-    if get_user(db, form_data.username):
+    if db.query(User).filter(User.username == form_data.username).first():
         db.close()
         raise HTTPException(status_code=400, detail="Username already registered")
-    user = User(username=form_data.username, hashed_password=get_password_hash(form_data.password))
+    user = User(username=form_data.username, hashed_password=pwd_context.hash(form_data.password))
     db.add(user)
     db.commit()
     db.refresh(user)
@@ -166,24 +108,18 @@ def register(form_data: OAuth2PasswordRequestForm = Depends()):
 @app.post("/token")
 def login(form_data: OAuth2PasswordRequestForm = Depends()):
     db = SessionLocal()
-    user = get_user(db, form_data.username)
+    user = db.query(User).filter(User.username == form_data.username).first()
     db.close()
-    if not user or not verify_password(form_data.password, user.hashed_password):
+    if not user or not pwd_context.verify(form_data.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
-    token = create_access_token({"sub": user.username})
+    token = jwt.encode({"sub": user.username, "exp": datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)}, SECRET_KEY, algorithm=ALGORITHM)
     return {"access_token": token, "token_type": "bearer"}
 
 @app.post("/mensagem")
 def mensagem(data: dict, user: User = Depends(get_current_user)):
     msg = data.get("msg", "")
-    try:
-        pred, _, _ = learn.predict(msg)
-        resposta = f"Sua mensagem foi classificada como '{pred}'. Aqui vai uma sugestão personalizada: Continue acreditando em você!"
-        categoria = "Auto"
-    except Exception as e:
-        print(f"❌ Erro no modelo local: {e}")
-        resposta = smart_fallback(msg)
-        categoria = "IA externa"
+    resposta = smart_fallback(msg)
+    categoria = "IA externa"
 
     db = SessionLocal()
     chat = Chat(message=msg, response=resposta, category=categoria, user_id=user.id)
@@ -198,3 +134,19 @@ def historico(user: User = Depends(get_current_user)):
     chats = db.query(Chat).filter(Chat.user_id == user.id).all()
     db.close()
     return [{"mensagem": c.message, "categoria": c.category, "resposta": c.response, "data": c.timestamp} for c in chats]
+
+# Auxiliar
+def get_current_user(token: str = Depends(oauth2_scheme)):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username: str = payload.get("sub")
+        if username is None:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    db = SessionLocal()
+    user = db.query(User).filter(User.username == username).first()
+    db.close()
+    if user is None:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return user
